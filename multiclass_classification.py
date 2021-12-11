@@ -6,6 +6,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import DistilBertModel, DistilBertTokenizer
 import os
+from dataset import MultiClassDataset
+from model import DistillBERTClass
 import warnings
 from transformers import logging
 os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,4,5"
@@ -15,12 +17,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Import the csv into pandas dataframe and add the headers
 df = pd.read_csv('./data/newsCorpora.csv', sep='\t', names=['ID', 'TITLE', 'URL', 'PUBLISHER', 'CATEGORY', 'STORY', 'HOSTNAME', 'TIMESTAMP'])
-# df.head()
-# # Removing unwanted columns and only leaving title of news and the category which will be the target
 df = df[['TITLE', 'CATEGORY']]
-# df.head()
 
-# # Converting the codes to appropriate categories using a dictionary
+# Converting the codes to appropriate categories using a dictionary
 my_dict = {
     'e': 'Entertainment',
     'b': 'Business',
@@ -54,76 +53,24 @@ LEARNING_RATE = 1e-05
 tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-cased')
 
 
-class Triage(Dataset):
-    def __init__(self, dataframe, tokenizer, max_len):
-        self.len = len(dataframe)
-        self.data = dataframe
-        self.tokenizer = tokenizer
-        self.max_len = max_len
-
-    def __getitem__(self, index):
-        title = str(self.data.TITLE[index])
-        title = " ".join(title.split())
-        inputs = self.tokenizer.encode_plus(
-            title,
-            None,
-            add_special_tokens=True,
-            max_length=self.max_len,
-            pad_to_max_length=True,
-            return_token_type_ids=True,
-            truncation=True
-        )
-        ids = inputs['input_ids']
-        mask = inputs['attention_mask']
-
-        return {
-            'ids': torch.tensor(ids, dtype=torch.long),
-            'mask': torch.tensor(mask, dtype=torch.long),
-            'targets': torch.tensor(self.data.ENCODE_CAT[index], dtype=torch.long)
-        }
-
-    def __len__(self):
-        return self.len
-
-
 # Creating the dataset and dataloader for the neural network
 train_size = 0.8
 train_dataset = df.sample(frac=train_size, random_state=200)
 test_dataset = df.drop(train_dataset.index).reset_index(drop=True)
 train_dataset = train_dataset.reset_index(drop=True)
 
-
 print("FULL Dataset: {}".format(df.shape))
 print("TRAIN Dataset: {}".format(train_dataset.shape))
 print("TEST Dataset: {}".format(test_dataset.shape))
 
-training_set = Triage(train_dataset, tokenizer, MAX_LEN)
-testing_set = Triage(test_dataset, tokenizer, MAX_LEN)
+training_set = MultiClassDataset(train_dataset, tokenizer, MAX_LEN)
+testing_set = MultiClassDataset(test_dataset, tokenizer, MAX_LEN)
 
 train_params = {'batch_size': TRAIN_BATCH_SIZE, 'shuffle': True, 'num_workers': 0}
-test_params = {'batch_size': VALID_BATCH_SIZE, 'shuffle': True, 'num_workers': 0}
+test_params = {'batch_size': VALID_BATCH_SIZE, 'shuffle': False, 'num_workers': 0}
 
 training_loader = DataLoader(training_set, **train_params)
 testing_loader = DataLoader(testing_set, **test_params)
-
-
-class DistillBERTClass(torch.nn.Module):
-    def __init__(self):
-        super(DistillBERTClass, self).__init__()
-        self.l1 = DistilBertModel.from_pretrained("distilbert-base-uncased")
-        self.pre_classifier = torch.nn.Linear(768, 768)
-        self.dropout = torch.nn.Dropout(0.3)
-        self.classifier = torch.nn.Linear(768, 4)
-
-    def forward(self, input_ids, attention_mask):
-        output_1 = self.l1(input_ids=input_ids, attention_mask=attention_mask)
-        hidden_state = output_1[0]
-        pooler = hidden_state[:, 0]
-        pooler = self.pre_classifier(pooler)
-        pooler = torch.nn.ReLU()(pooler)
-        pooler = self.dropout(pooler)
-        output = self.classifier(pooler)
-        return output
 
 
 model = DistillBERTClass()
@@ -230,7 +177,6 @@ print("Accuracy on test data = %0.2f%%" % acc)
 
 
 # Saving the files for re-use
-
 output_model_file = './models/pytorch_distilbert_news.bin'
 output_vocab_file = './models/vocab_distilbert_news.bin'
 
